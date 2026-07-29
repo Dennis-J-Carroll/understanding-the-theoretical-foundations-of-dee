@@ -1,1 +1,26 @@
 # understanding-the-theoretical-foundations-of-dee
+
+## Reproduction: arXiv:2603.18331 — "Understanding the Theoretical Foundations of Deep Neural Networks through Differential Equations"
+
+This paper is a **survey** with no original experiment table of its own — every result it cites is from other papers. So instead of matching a reported number, we tested the survey's foundational claim itself: **a residual block `h_{k+1} = h_k + f_theta(h_k)` is a forward-Euler discretization of an ODE** (its Eq. 1–2), and checked whether the consequences of that claim actually hold empirically.
+
+- **What was done**: trained a weight-tied residual (Euler) block on a two-moons classification toy task, then re-simulated the *same trained network* at finer step counts and measured whether its output converges (as a numerical integrator would) — plus three follow-ons: a higher-order (midpoint/RK2) discretization, a Neural ODE (`torchdiffeq` adaptive solve) as the continuous limit, and a plain non-residual stack as a negative control.
+- **Compute**: local CPU (4-core laptop, no GPU) — `--backend local`, all four runs together take well under a minute of wall-clock training.
+- **Downscaling**: 2D two-moons toy task, 8-dim hidden state, 400 training epochs, single seed — deliberately tiny, since the claim under test is architectural and doesn't require scale to falsify.
+- **Assessment**: **aligned** on all three positive claims (C1 order 0.89 vs. theoretical 1; C2 order 2.00 vs. theoretical 2; C3 order 0.72, smooth convergence to the adaptive solution), and the negative control (C4) behaved as expected — a plain deep stack collapsed to chance accuracy at every depth tested, rather than showing the same convergence.
+- **Paper vs. observed**: the paper states an analytical equivalence, not a number — there is nothing to numerically match. The comparison here is "does the stated equivalence have the empirical consequences it should," and it does, at this scale.
+
+Full write-up with figures: [`reports/differential-equations-reproduction/report.md`](reports/differential-equations-reproduction/report.md).
+Tutorial notebook (opens with the evidence, no rerun required): [`notebooks/differential_equations_reproduction.py`](notebooks/differential_equations_reproduction.py).
+
+### Experiment log
+
+| Branch | Purpose / change | Run command | Assessment | Compute |
+|---|---|---|---|---|
+| `main` | Publication surface (README, report, notebook) | Not run as an experiment (publication surface) | — | — |
+| [`orx/c1-resnet-as-forward-euler-discretization-2`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/tree/orx/c1-resnet-as-forward-euler-discretization-2) | Baseline (C1): weight-tied residual/Euler block, refine step count on the *same trained* network vs. an L=1024 reference | `uv venv --clear .venv && . .venv/bin/activate && uv pip install torch --index-url https://download.pytorch.org/whl/cpu && uv pip install numpy scikit-learn torchdiffeq && python train.py` | Aligned — empirical convergence order 0.89 (theory: 1) | local CPU |
+| [`orx/c2-midpoint-rk2-discretization-vs-euler`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/tree/orx/c2-midpoint-rk2-discretization-vs-euler) | Child of C1: swap Euler block for midpoint/RK2 block, same pipeline | `uv venv --clear .venv && . .venv/bin/activate && uv pip install torch --index-url https://download.pytorch.org/whl/cpu && uv pip install numpy scikit-learn torchdiffeq && python train.py` | Aligned — empirical order 2.00 (theory: 2), 20–850x lower error than C1 at matched step counts | local CPU |
+| [`orx/c3-neural-ode-adaptive-solve-vs-euler-discretiza`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/tree/orx/c3-neural-ode-adaptive-solve-vs-euler-discretiza) | Child of C1: train via `torchdiffeq` adjoint (dopri5) instead of fixed Euler steps; compare Euler-discretized approximation of the trained field to the adaptive solution | `uv venv --clear .venv && . .venv/bin/activate && uv pip install torch --index-url https://download.pytorch.org/whl/cpu && uv pip install numpy scikit-learn torchdiffeq && python train.py` | Aligned — empirical order 0.72, diffs shrink monotonically toward the adaptive solve | local CPU |
+| [`orx/c4-plain-non-residual-stack-negative-control`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/tree/orx/c4-plain-non-residual-stack-negative-control) | Child of C1: negative control — independent per-layer weights, no skip connection, no `dt` scaling | `uv venv --clear .venv && . .venv/bin/activate && uv pip install torch --index-url https://download.pytorch.org/whl/cpu && uv pip install numpy scikit-learn torchdiffeq && python train.py` | Supports the distinction — collapses to chance accuracy (49.17%) at every depth 8–128, unlike C1/C2 | local CPU |
+
+Note: an earlier baseline attempt (superseded, not listed above) failed at dependency install because `uv pip install torch --index-url <cpu-url> numpy scikit-learn torchdiffeq` on one line silently drops the non-torch packages from the default PyPI index — fixed by splitting the torch-CPU install from the rest.
