@@ -176,13 +176,19 @@ def _(c3_diff, c3_dt, mo, plt):
 def _(mo):
     mo.md(
         r"""
-        ## Negative control (C4): is this just "deep nets are smooth"?
+        ## Negative control (C4), then an ablation to find out what it showed
 
         Everything above could, in principle, be an artifact of deep networks
         generically getting smoother as they get deeper — nothing to do with the
         residual/Euler structure specifically. To check, we removed the skip
         connection and weight-tying entirely: independent weights per layer, no
-        `+`, no `dt`. Same depth sweep (8 to 128 layers).
+        `+`, no `dt`. Same depth sweep (8 to 128 layers). Every depth collapsed to
+        **49.17% test accuracy** — chance level — with near-machine-precision
+        agreement between depths: outright training failure, not "no convergence law."
+
+        But that changes **three things at once** relative to C1 (skip, weight-tying,
+        `dt`), so it can't say which one caused the collapse. **C5** isolates one:
+        restore only the skip connection (still untied weights, still no `dt`).
         """
     )
     return
@@ -193,18 +199,21 @@ def _(mo, plt):
     _c1_depths = [8, 16, 32, 64, 128, 256]
     _c1_acc = [0.9416666626930237, 0.9083333611488342, 0.8833333253860474,
                0.8666666746139526, 0.8583333492279053, 0.8500000238418579]
+    _c5_depths = [8, 16, 32, 64, 128]
+    _c5_acc = [0.9416666626930237, 0.9416666626930237, 0.9333333373069763, 0.875, 0.949999988079071]
     _c4_depths = [8, 16, 32, 64, 128]
     _c4_acc = [0.49166667461395264] * 5
 
-    _fig, _ax = plt.subplots(figsize=(6, 4))
-    _ax.semilogx(_c1_depths, _c1_acc, "o-", color="#2166ac", linewidth=2, markersize=7, label="C1: residual/Euler")
-    _ax.semilogx(_c4_depths, _c4_acc, "x--", color="#999999", linewidth=2, markersize=9, label="C4: plain stack")
+    _fig, _ax = plt.subplots(figsize=(6.5, 4))
+    _ax.semilogx(_c1_depths, _c1_acc, "o-", color="#2166ac", linewidth=2, markersize=7, label="C1: skip + tied + dt")
+    _ax.semilogx(_c5_depths, _c5_acc, "d-", color="#4daf4a", linewidth=2, markersize=8, label="C5: skip only")
+    _ax.semilogx(_c4_depths, _c4_acc, "x--", color="#999999", linewidth=2, markersize=9, label="C4: neither")
     _ax.axhline(0.5, color="black", linewidth=0.8, linestyle=":", alpha=0.6)
     _ax.set_xlabel("depth (layers / steps L)")
     _ax.set_ylabel("test accuracy")
     _ax.set_ylim(0.4, 1.0)
-    _ax.set_title("Plain deep stacks collapse to chance; the residual construction doesn't")
-    _ax.legend(loc="lower left")
+    _ax.set_title("The skip connection, not weight-tying, prevents the collapse")
+    _ax.legend(loc="lower left", fontsize=9)
     _ax.grid(True, which="both", alpha=0.3)
     _fig.tight_layout()
     mo.mpl.interactive(_fig)
@@ -215,11 +224,10 @@ def _(mo, plt):
 def _(mo):
     mo.md(
         r"""
-        Every depth from 8 to 128 collapsed to **49.17% test accuracy** — chance
-        level on this balanced task — with near-machine-precision agreement between
-        depths (the network isn't converging to a flow, it's just failing to train:
-        the vanishing-gradient problem that historically motivated ResNets in the
-        first place).
+        C5 trains successfully at every depth (0.87-0.95 accuracy) — comparable to
+        C1, nothing like C4's collapse. The skip connection alone restores
+        trainability, matching He et al. (2015)'s original motivation for ResNets;
+        weight-tying was not the ingredient responsible for C4's failure.
 
         ## Assessment summary
 
@@ -228,7 +236,8 @@ def _(mo):
         | C1: ResNet block = Euler step | order 0.89 (theory 1) | aligned |
         | C2: better scheme = more accurate | order 2.00 (theory 2) | aligned |
         | C3: Neural ODE = continuous limit | order 0.72, smooth convergence | aligned |
-        | C4: negative control | collapses to chance at all depths | supports the distinction |
+        | C4: negative control (3 factors at once) | collapses to chance at all depths | inconclusive alone |
+        | C5: ablation (skip only) | trains at C1-level accuracy at all depths | isolates skip connection as the cause |
 
         This was a **toy-scale, single-seed, CPU-only** check (two-moons, 8-dim
         hidden state) — see the [full report](../reports/differential-equations-reproduction/report.md)

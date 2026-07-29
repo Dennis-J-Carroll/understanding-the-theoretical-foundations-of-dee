@@ -30,6 +30,7 @@ That gives four testable claims, run as one experiment tree (`orx/c1...` → chi
 | **C2** | A higher-order scheme (midpoint/RK2) discretizes more accurately at the same step budget | §3.1.1 (PolyNet, FractalNet) |
 | **C3** | A Neural ODE (adaptive continuous solver) is the limit that Euler discretization approaches | §3.1 (Neural ODEs / NDEs) |
 | **C4** (negative control) | A plain deep stack — no skip connection, no shared weights — should **not** show this convergence | motivates the whole survey (He et al. 2015) |
+| **C5** (ablation) | Isolates *which* missing ingredient causes C4's outcome: restore only the skip connection | — |
 
 ## Setup
 
@@ -60,7 +61,8 @@ Each claim changes exactly this block (and nothing else in the training loop):
 - **C1**: the block above, trained at depth `L=8`.
 - **C2**: `h = h + dt * f(h + dt/2 * f(h))` — midpoint/RK2 step.
 - **C3**: `torchdiffeq.odeint_adjoint` (dopri5) replaces the step loop entirely — a genuinely continuous solve.
-- **C4**: independent, untied weights per layer, no `+`, no `dt` — a conventional deep stack.
+- **C4**: independent, untied weights per layer, no `+`, no `dt` — three changes from C1 at once.
+- **C5**: independent, untied weights per layer, but the `+` (skip connection) restored — isolates one change at a time.
 
 ## C1 — the headline result
 
@@ -99,13 +101,25 @@ The survey frames Neural ODEs as what a ResNet approaches as depth → ∞. We t
 
 Yes — diff to the adaptive solution shrinks from 0.077 (4 steps) to 0.0061 (128 steps), empirical order 0.72 (a bit below 1, plausibly a noise floor set by the adaptive solver's own `rtol=1e-3`). Discrete Euler stacks (C1) and continuous Neural ODEs (C3) are two views of the same object, converging toward each other from opposite directions.
 
-## C4 — negative control: this isn't just "deep nets are deep"
+## C4 and C5 — negative control, then an ablation to find out what it actually showed
 
 Everything above could, in principle, be an artifact of "any sufficiently regular deep network smooths out as it gets deeper." C4 removes the residual/weight-tying structure — independent weights per layer, no skip connection, no `dt` — and repeats the same depth sweep.
 
-![Negative control](images/fig4_negative_control.png)
+**Every depth from 8 to 128 collapses to exactly 49.17% test accuracy** — chance level on this balanced task — with consecutive-depth output diffs near floating-point noise (~1e-6). That's not "no clean convergence law," it's outright training failure.
 
-The result is sharper than we expected: **every depth from 8 to 128 collapses to exactly 49.17% test accuracy** — chance level on this balanced task — with consecutive-depth output diffs near floating-point noise (~1e-6). This isn't "no clean convergence law," it's outright training failure: a plain deep stack with `tanh` activations and no residual path suffers the vanishing-gradient degradation that historically motivated ResNets in the first place (He et al., 2015) — the exact empirical observation the survey's introduction opens with. The convergence behavior in C1/C2 is specific to the residual/Euler construction, not a generic property of "networks with many layers."
+But C4 changes *three* things relative to C1 at once (skip, weight-tying, `dt`), so on its own it cannot say which change caused the collapse — a control that changes three variables isn't a clean control. **C5** isolates one: restore only the skip connection (still untied weights, still no `dt`) and repeat the depth sweep.
+
+![Ablation: skip connection vs. weight-tying](images/fig4_negative_control.png)
+
+| Depth | C1 (skip + tied + dt) | C5 (skip only) | C4 (neither) |
+|---|---|---|---|
+| 8 | 0.942 | 0.942 | 0.492 |
+| 16 | 0.908 | 0.942 | 0.492 |
+| 32 | 0.883 | 0.933 | 0.492 |
+| 64 | 0.867 | 0.875 | 0.492 |
+| 128 | 0.858 | 0.950 | 0.492 |
+
+C5 trains successfully at every depth — comparable to C1, nothing like C4's collapse. **The skip connection alone is what restores trainability**, matching He et al. (2015)'s original motivation for ResNets; weight-tying was not the ingredient responsible for C4's failure. (C5's own consecutive-depth diffs don't shrink cleanly with depth — expected, since untied weights mean there's no shared vector field for more layers to be a finer sampling *of*; that structure is what weight-tying buys you, and it's what C1/C2's clean power-law convergence specifically requires.)
 
 ## Assessment
 
@@ -114,7 +128,8 @@ The result is sharper than we expected: **every depth from 8 to 128 collapses to
 | C1 | ResNet block ≡ forward-Euler ODE step | order 0.89 (theory: 1) | **aligned** |
 | C2 | Better numerical scheme → more accurate discretization | order 2.00 (theory: 2), 20–850× lower error | **aligned** |
 | C3 | Neural ODE = continuous-depth limit of discrete stack | order 0.72; smooth convergence to adaptive solve | **aligned** |
-| C4 | (negative control, not a paper claim) | plain stack collapses to chance accuracy at all depths | **supports the distinction** — confirms C1–C3 aren't generic deep-net behavior |
+| C4 | (negative control, not a paper claim) | plain stack (3 changes at once) collapses to chance accuracy at all depths | **inconclusive under this setup alone** — conflates skip connection and weight-tying |
+| C5 | (ablation, not a paper claim) | skip-only stack trains at C1-level accuracy at all depths | **isolates the cause**: skip connection, not weight-tying, prevents C4's collapse |
 
 Since the source is a survey with no original numbers, "paper's result" above is the analytical statement (Eq. 1–2 and the surrounding discussion), not a number — we're checking that a stated mathematical equivalence has the empirical consequences it should, not matching a reported metric.
 
@@ -131,3 +146,4 @@ Since the source is a survey with no original numbers, "paper's result" above is
 - [`orx/c2-midpoint-rk2-discretization-vs-euler`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/tree/orx/c2-midpoint-rk2-discretization-vs-euler) — C2
 - [`orx/c3-neural-ode-adaptive-solve-vs-euler-discretiza`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/tree/orx/c3-neural-ode-adaptive-solve-vs-euler-discretiza) — C3
 - [`orx/c4-plain-non-residual-stack-negative-control`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/tree/orx/c4-plain-non-residual-stack-negative-control) — C4
+- [`orx/c5-skip-connection-only-ablation-untied-weights`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/tree/orx/c5-skip-connection-only-ablation-untied-weights) — C5
