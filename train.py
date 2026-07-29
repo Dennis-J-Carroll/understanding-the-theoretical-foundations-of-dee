@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 from data import get_moons_data
-from model import ODEClassifier, EulerODEBlock
+from model import ODEClassifier, MidpointODEBlock
 
 SEED = 0
 TRAIN_STEPS = 8            # depth (Euler steps) used during training
@@ -37,7 +37,7 @@ def fit_convergence_order(results, diff_key):
 def main():
     Xtr, ytr, Xte, yte = get_moons_data(seed=SEED)
 
-    model = ODEClassifier(block_cls=EulerODEBlock)
+    model = ODEClassifier(block_cls=MidpointODEBlock)
     opt = torch.optim.Adam(model.parameters(), lr=LR)
     loss_fn = nn.BCEWithLogitsLoss()
 
@@ -70,7 +70,7 @@ def main():
     order = fit_convergence_order(results, "mean_abs_diff_to_reference")
 
     summary = {
-        "variant": "C1_euler_weight_tied",
+        "variant": "C2_midpoint_rk2",
         "train_depth": TRAIN_STEPS,
         "test_acc_at_train_depth": train_depth_acc,
         "empirical_convergence_order": order,

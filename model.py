@@ -34,6 +34,24 @@ class EulerODEBlock(nn.Module):
         return euler_integrate(self.f, h0, num_steps, self.T)
 
 
+class MidpointODEBlock(nn.Module):
+    """RK2 midpoint step: h_{k+1} = h_k + dt * f(h_k + dt/2 * f(h_k))."""
+
+    def __init__(self, dim, hidden=32, T=1.0):
+        super().__init__()
+        self.f = VectorField(dim, hidden)
+        self.T = T
+
+    def forward(self, h0, num_steps):
+        dt = self.T / num_steps
+        h = h0
+        for _ in range(num_steps):
+            k1 = self.f(h)
+            k2 = self.f(h + 0.5 * dt * k1)
+            h = h + dt * k2
+        return h
+
+
 class ODEClassifier(nn.Module):
     def __init__(self, in_dim=2, hidden_dim=8, mlp_hidden=32, T=1.0, block_cls=EulerODEBlock):
         super().__init__()
