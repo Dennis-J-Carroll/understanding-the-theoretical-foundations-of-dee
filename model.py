@@ -1,4 +1,5 @@
 import torch.nn as nn
+from torchdiffeq import odeint_adjoint as odeint
 
 
 class VectorField(nn.Module):
@@ -24,24 +25,41 @@ def euler_integrate(f, h0, num_steps, T=1.0):
     return h
 
 
-class EulerODEBlock(nn.Module):
-    def __init__(self, dim, hidden=32, T=1.0):
+class _TimeWrapped(nn.Module):
+    """torchdiffeq expects func(t, h); f_theta here is autonomous (no explicit t)."""
+
+    def __init__(self, f):
+        super().__init__()
+        self.f = f
+
+    def forward(self, t, h):
+        return self.f(h)
+
+
+class NeuralODEBlock(nn.Module):
+    """Solves dh/dt = f_theta(h) on [0, T] with an adaptive solver (dopri5, adjoint)."""
+
+    def __init__(self, dim, hidden=32, T=1.0, rtol=1e-3, atol=1e-4):
         super().__init__()
         self.f = VectorField(dim, hidden)
+        self.func = _TimeWrapped(self.f)
         self.T = T
+        self.rtol = rtol
+        self.atol = atol
 
-    def forward(self, h0, num_steps):
-        return euler_integrate(self.f, h0, num_steps, self.T)
+    def forward(self, h0, t_span):
+        out = odeint(self.func, h0, t_span, method="dopri5", rtol=self.rtol, atol=self.atol)
+        return out[-1]
 
 
-class ODEClassifier(nn.Module):
-    def __init__(self, in_dim=2, hidden_dim=8, mlp_hidden=32, T=1.0, block_cls=EulerODEBlock):
+class NeuralODEClassifier(nn.Module):
+    def __init__(self, in_dim=2, hidden_dim=8, mlp_hidden=32, T=1.0):
         super().__init__()
         self.embed = nn.Linear(in_dim, hidden_dim)
-        self.block = block_cls(hidden_dim, mlp_hidden, T=T)
+        self.block = NeuralODEBlock(hidden_dim, mlp_hidden, T=T)
         self.head = nn.Linear(hidden_dim, 1)
 
-    def forward(self, x, num_steps):
+    def forward(self, x, t_span):
         h0 = self.embed(x)
-        hT = self.block(h0, num_steps)
+        hT = self.block(h0, t_span)
         return self.head(hT).squeeze(-1)
