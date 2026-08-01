@@ -1,5 +1,42 @@
 # understanding-the-theoretical-foundations-of-dee
 
+## Reproduction: arXiv:2506.09985 — "V-JEPA 2: Self-Supervised Video Models Enable Understanding, Prediction and Planning"
+
+[![Open in molab](https://marimo.io/molab-shield.svg)](https://molab.marimo.io/github/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/blob/main/notebooks/vjepa2_temporal_order_reproduction.py)
+
+V-JEPA 2 (Meta FAIR) claims that self-supervised **video** pretraining gives
+frozen features genuine motion/temporal sensitivity that image pretraining
+doesn't — evidenced by a large probe-accuracy gap over image-style encoders on
+a motion-centric benchmark (SSv2: 77.3% vs. 55.4–69.7%) and a much smaller gap
+on an appearance-centric one (ImageNet: 84.6%, close to peers).
+
+- **What was done**: downscaled the claim to a real-vs-shuffled frame-order
+  probe on frozen features — same 64 frames either way, only the order
+  permuted — using the real released `facebook/vjepa2-vitl-fpc64-256`
+  checkpoint (~300M params) vs. a `facebook/dinov2-small` image-encoder
+  baseline (frames encoded independently, mean-pooled: provably
+  order-invariant). Data: `nateraw/kinetics-mini` (public, no license gate).
+- **Verdict**: **Reproduced (directional proxy, small-N)**. V-JEPA 2: 95.0%
+  held-out probe accuracy at telling real order from shuffled. DINOv2
+  baseline: exactly 50.0% (chance), with a measured real-vs-shuffled feature
+  difference of 9.5×10⁻⁷ — float32 noise, confirming the order-invariance
+  argument empirically rather than by assumption.
+- **Paper vs. reproduced**: paper's SSv2 probe gap (77.3% vs. 55.4–69.7%,
+  ViT-g/1B, full val set, gated data) vs. this reproduction's order-detection
+  proxy gap (95.0% vs. 50.0%, ViT-L/300M, N=20 clips, public data) — same
+  directional claim, different task/scale/data; not a claim of matching 77.3%.
+- **Compute**: `local` backend (CPU), ~83 min wall-clock, no cloud spend.
+- **Links**: [molab tutorial notebook](https://molab.marimo.io/github/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/blob/main/notebooks/vjepa2_temporal_order_reproduction.py) · [full report](reports/vjepa2-temporal-order-sensitivity/report.md)
+
+### Experiment log
+
+| Branch | Purpose / change | Run command | Verdict | Compute |
+|---|---|---|---|---|
+| `main` | Publication surface (README, report, notebook) | Not run as an experiment (publication surface) | — | — |
+| [`orx/v1-v-jepa-2-frozen-feature-temporal-order-sensit`](https://github.com/Dennis-J-Carroll/understanding-the-theoretical-foundations-of-dee/blob/orx/v1-v-jepa-2-frozen-feature-temporal-order-sensit/run_probe.py) | Root: frozen V-JEPA 2 + DINOv2 feature extraction, real/shuffled frame-order pairing, linear probes | `uv venv --clear .venv && . .venv/bin/activate && uv pip install torch --index-url https://download.pytorch.org/whl/cpu && uv pip install "transformers>=4.53" huggingface_hub av pillow scikit-learn numpy && python run_probe.py` | Reproduced (directional proxy, small-N) — V-JEPA 2 95.0% vs. baseline 50.0% held-out probe accuracy | local CPU, ~83 min |
+
+---
+
 ## Reproduction: arXiv:2603.18331 — "Understanding the Theoretical Foundations of Deep Neural Networks through Differential Equations"
 
 This paper is a **survey** with no original experiment table of its own — every result it cites is from other papers. So instead of matching a reported number, we tested the survey's foundational claim itself: **a residual block `h_{k+1} = h_k + f_theta(h_k)` is a forward-Euler discretization of an ODE** (its Eq. 1–2), and checked whether the consequences of that claim actually hold empirically.
