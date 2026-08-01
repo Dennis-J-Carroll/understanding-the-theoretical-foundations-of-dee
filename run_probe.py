@@ -31,17 +31,20 @@ import torch
 from huggingface_hub import hf_hub_download
 from PIL import Image
 from sklearn.linear_model import LogisticRegression
-from transformers import AutoImageProcessor, AutoModel
+from transformers import AutoModel
 
-# Manual replacement for AutoVideoProcessor (which hard-requires torchvision as a
-# backend) -- values copied verbatim from vjepa2-vitl-fpc64-256's own
-# video_preprocessor_config.json: resize shortest edge to 292, center-crop to
-# 256x256, rescale to [0,1], normalize with ImageNet mean/std. Implemented with
-# PIL + numpy only so the run command's dependency list doesn't need touching.
+# Manual replacements for AutoVideoProcessor / AutoImageProcessor -- this
+# transformers version hard-requires torchvision as a backend for BOTH (even
+# image processors with use_fast=False), which isn't installed here. Values
+# below are copied verbatim from each model's own preprocessor_config.json /
+# video_preprocessor_config.json on the Hub. Implemented with PIL + numpy only
+# so the run command's dependency list doesn't need touching.
 VJEPA_RESIZE_SHORT_EDGE = 292
 VJEPA_CROP_SIZE = 256
-VJEPA_IMAGE_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-VJEPA_IMAGE_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+DINO_RESIZE_SHORT_EDGE = 256
+DINO_CROP_SIZE = 224
 
 SEED = 42
 NUM_FRAMES = 64          # fixed by the vjepa2-vitl-fpc64-256 checkpoint
@@ -108,7 +111,25 @@ def preprocess_frame_for_vjepa(frame_hwc_uint8):
     top = (new_h - VJEPA_CROP_SIZE) // 2
     img = img.crop((left, top, left + VJEPA_CROP_SIZE, top + VJEPA_CROP_SIZE))
     arr = np.asarray(img).astype(np.float32) / 255.0
-    arr = (arr - VJEPA_IMAGE_MEAN) / VJEPA_IMAGE_STD
+    arr = (arr - IMAGENET_MEAN) / IMAGENET_STD
+    return arr.transpose(2, 0, 1)  # C, H, W
+
+
+def preprocess_frame_for_dino(frame_hwc_uint8):
+    img = Image.fromarray(frame_hwc_uint8)
+    w, h = img.size
+    if w <= h:
+        new_w = DINO_RESIZE_SHORT_EDGE
+        new_h = int(round(h * DINO_RESIZE_SHORT_EDGE / w))
+    else:
+        new_h = DINO_RESIZE_SHORT_EDGE
+        new_w = int(round(w * DINO_RESIZE_SHORT_EDGE / h))
+    img = img.resize((new_w, new_h), Image.Resampling.BICUBIC)
+    left = (new_w - DINO_CROP_SIZE) // 2
+    top = (new_h - DINO_CROP_SIZE) // 2
+    img = img.crop((left, top, left + DINO_CROP_SIZE, top + DINO_CROP_SIZE))
+    arr = np.asarray(img).astype(np.float32) / 255.0
+    arr = (arr - IMAGENET_MEAN) / IMAGENET_STD
     return arr.transpose(2, 0, 1)  # C, H, W
 
 
@@ -121,7 +142,7 @@ def vjepa_pooled_features(model, device, frames_64):
     return feats.mean(dim=1).squeeze(0).cpu().numpy()
 
 
-def baseline_pooled_features(model, processor, device, frames_64):
+def baseline_pooled_features(model, device, frames_64):
     # Pools over ALL 64 frames (the exact same set for "real" and "shuffled" --
     # just a different order), processed independently in chunks then averaged.
     # Mean-of-means over equal-size chunks == mean over the full set, so chunking
@@ -130,17 +151,16 @@ def baseline_pooled_features(model, processor, device, frames_64):
     running_count = 0
     for start in range(0, NUM_FRAMES, BASELINE_BATCH):
         chunk = frames_64[start:start + BASELINE_BATCH]
-        imgs = [Image.fromarray(f) for f in chunk]
-        inputs = processor(images=imgs, return_tensors="pt")
-        inputs = {k: v.to(device) for k, v in inputs.items()}
+        chw = [preprocess_frame_for_dino(f) for f in chunk]
+        pixel_values = torch.from_numpy(np.stack(chw, axis=0)).float().to(device)
         with torch.no_grad():
-            out = model(**inputs).last_hidden_state  # (chunk_len, tokens, hidden)
+            out = model(pixel_values=pixel_values).last_hidden_state  # (chunk_len, tokens, hidden)
         running_sum = running_sum + out.sum(dim=(0, 1)).cpu().numpy()
         running_count += out.shape[0] * out.shape[1]
     return running_sum / running_count
 
 
-def build_split(clip_map, split_name, vjepa, dino, dino_proc, device, clip_counter):
+def build_split(clip_map, split_name, vjepa, dino, device, clip_counter):
     X_vjepa, y_vjepa = [], []
     X_base, y_base = [], []
     max_base_diff = 0.0
@@ -163,8 +183,8 @@ def build_split(clip_map, split_name, vjepa, dino, dino_proc, device, clip_count
             X_vjepa += [f_real, f_shuf]
             y_vjepa += [1, 0]
 
-            b_real = baseline_pooled_features(dino, dino_proc, device, frames_64)
-            b_shuf = baseline_pooled_features(dino, dino_proc, device, frames_shuffled)
+            b_real = baseline_pooled_features(dino, device, frames_64)
+            b_shuf = baseline_pooled_features(dino, device, frames_shuffled)
             X_base += [b_real, b_shuf]
             y_base += [1, 0]
             max_base_diff = max(max_base_diff, float(np.abs(b_real - b_shuf).max()))
@@ -185,16 +205,15 @@ def main():
     vjepa = AutoModel.from_pretrained(VJEPA_REPO).to(device).eval()
 
     log(f"loading {BASELINE_REPO} ...")
-    dino_proc = AutoImageProcessor.from_pretrained(BASELINE_REPO, use_fast=False)
     dino = AutoModel.from_pretrained(BASELINE_REPO).to(device).eval()
 
     clip_counter = {"n": 0}
     log("building probe-train split (train/, 2 clips x 5 classes) ...")
     Xv_tr, yv_tr, Xb_tr, yb_tr, diff_tr = build_split(
-        TRAIN_CLIPS, "train", vjepa, dino, dino_proc, device, clip_counter)
+        TRAIN_CLIPS, "train", vjepa, dino, device, clip_counter)
     log("building probe-test split (val/, 2 clips x 5 classes, disjoint videos) ...")
     Xv_te, yv_te, Xb_te, yb_te, diff_te = build_split(
-        TEST_CLIPS, "val", vjepa, dino, dino_proc, device, clip_counter)
+        TEST_CLIPS, "val", vjepa, dino, device, clip_counter)
 
     max_base_diff = max(diff_tr, diff_te)
 
